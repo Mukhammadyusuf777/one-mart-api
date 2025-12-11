@@ -14,29 +14,46 @@ const db = new Pool({
     ssl: { rejectUnauthorized: false }
 });
 
-// --- ГЛАВНЫЕ ЭНДПОИНТЫ ---
-
-// 1. Получить ВСЕ товары (Витрина) + Фильтр по категории
+// --- ГЛАВНЫЙ ПОИСК ТОВАРОВ ---
 app.get('/products/all', async (req, res) => {
-    const { category } = req.query; // Получаем категорию, если есть
+    // Получаем параметры от приложения:
+    // q = текст поиска (например, "cola")
+    // category = категория (например, "Ichimliklar")
+    const { q, category } = req.query; 
+
     try {
         let query = `
-            SELECT p.id, p.name_uz, p.name_ru, p.price, p.photo_url, p.store_id, 
-                   s.name as store_name, s.latitude, s.longitude
+            SELECT p.id, p.name_uz, p.name_ru, p.price, p.photo_url, 
+                   s.name as store_name
             FROM products p
             JOIN stores s ON p.store_id = s.id
+            WHERE 1=1 
         `;
         
         let params = [];
-        
-        // Если клиент нажал на категорию
-        if (category && category !== 'Barchasi') {
-            // Здесь простая логика: ищем совпадение в названии категории (в реальном проекте лучше по ID)
-            // Для примера просто вернем все, но в будущем тут будет WHERE category_id = ...
+        let paramIndex = 1;
+
+        // 1. Ели есть ПОИСК (q)
+        if (q && q.trim() !== '') {
+            query += ` AND (p.name_uz ILIKE $${paramIndex} OR p.name_ru ILIKE $${paramIndex})`;
+            params.push(`%${q}%`);
+            paramIndex++;
         }
 
-        // Перемешиваем товары, чтобы было интересно (как в ТикТоке/Узум)
-        query += ' ORDER BY RANDOM() LIMIT 50';
+        // 2. Если есть КАТЕГОРИЯ
+        // (Так как у нас в базе нет колонки category_id, мы хитрим и ищем по словам)
+        if (category && category !== 'Barchasi') {
+            if (category === 'Ichimliklar') {
+                query += ` AND (p.name_uz ILIKE '%cola%' OR p.name_uz ILIKE '%suv%' OR p.name_uz ILIKE '%fanta%' OR p.name_uz ILIKE '%litr%')`;
+            } else if (category === 'Oziq-ovqat') {
+                query += ` AND (p.name_uz ILIKE '%yog%' OR p.name_uz ILIKE '%guruch%' OR p.name_uz ILIKE '%un%' OR p.name_uz ILIKE '%shakar%')`;
+            } else if (category === 'Shirinliklar') {
+                query += ` AND (p.name_uz ILIKE '%shokolad%' OR p.name_uz ILIKE '%pechenye%' OR p.name_uz ILIKE '%tort%')`;
+            }
+            // В реальном проекте мы бы добавили колонку category_id в базу данных
+        }
+
+        query += ' ORDER BY p.id DESC LIMIT 50';
 
         const { rows } = await db.query(query, params);
         res.json(rows);
@@ -46,7 +63,6 @@ app.get('/products/all', async (req, res) => {
     }
 });
 
-// 2. Получить список магазинов (для расчета расстояния)
 app.get('/stores', async (req, res) => {
     try {
         const { rows } = await db.query('SELECT * FROM stores');

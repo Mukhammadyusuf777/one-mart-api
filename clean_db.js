@@ -1,39 +1,53 @@
 require('dotenv').config();
-const { Pool } = require('pg');
+const { Client } = require('pg'); // <--- ИСПОЛЬЗУЕМ CLIENT ВМЕСТО POOL
 
-const db = new Pool({
+// Создаем клиента (прямое соединение)
+const client = new Client({
     connectionString: process.env.DATABASE_URL,
     ssl: { rejectUnauthorized: false }
 });
 
-async function cleanDatabase() {
-    const client = await db.connect();
+async function createOrdersTable() {
     try {
-        console.log('🧹 Начинаем уборку базы данных...');
+        console.log('🔌 Подключаемся к базе данных...');
+        await client.connect(); // Явное подключение
 
-        // 1. Удаление дубликатов
-        // Эта сложная команда оставляет только товар с самым высоким ID (самый свежий), 
-        // а старые копии с таким же именем удаляет.
-        const query = `
-            DELETE FROM products a USING products b
-            WHERE a.id < b.id 
-            AND a.name_uz = b.name_uz 
-            AND a.store_id = b.store_id;
-        `;
+        console.log('📦 Создаем таблицы для заказов...');
 
-        const res = await client.query(query);
-        console.log(`✅ УДАЛЕНО ДУБЛИКАТОВ: ${res.rowCount} штук.`);
+        // 1. Таблица ЗАКАЗОВ
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS orders (
+                id SERIAL PRIMARY KEY,
+                user_name VARCHAR(100),
+                user_phone VARCHAR(50),
+                user_address TEXT,
+                total_price INTEGER,
+                delivery_price INTEGER,
+                status VARCHAR(20) DEFAULT 'new',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        `);
 
-        // 2. Проверка, сколько осталось
-        const countRes = await client.query('SELECT count(*) FROM products');
-        console.log(`📊 Всего товаров осталось: ${countRes.rows[0].count}`);
+        // 2. Таблица ТОВАРОВ В ЗАКАЗЕ
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS order_items (
+                id SERIAL PRIMARY KEY,
+                order_id INTEGER REFERENCES orders(id),
+                product_id INTEGER,
+                product_name VARCHAR(255),
+                quantity INTEGER,
+                price INTEGER
+            );
+        `);
+
+        console.log('✅ Таблицы заказов успешно созданы!');
 
     } catch (e) {
-        console.error('❌ Ошибка:', e);
+        console.error('❌ Ошибка при создании таблиц:', e);
     } finally {
-        client.release();
-        db.end();
+        await client.end(); // Обязательно закрываем соединение
+        console.log('🔌 Соединение закрыто.');
     }
 }
 
-cleanDatabase();
+createOrdersTable();

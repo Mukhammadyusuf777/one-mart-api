@@ -14,56 +14,100 @@ const db = new Pool({
     ssl: { rejectUnauthorized: false }
 });
 
-// ГЛАВНЫЙ ПОИСК И ФИЛЬТР
+// --- 1. КЛИЕНТ: Поиск товаров ---
 app.get('/products/all', async (req, res) => {
     const { q, category } = req.query; 
-
     try {
         let query = `
-            SELECT p.id, p.name_uz, p.price, p.photo_url, p.category, 
-                   s.name as store_name
+            SELECT p.id, p.name_uz, p.price, p.photo_url, p.category, s.name as store_name
             FROM products p
             JOIN stores s ON p.store_id = s.id
             WHERE 1=1 
         `;
-        
         let params = [];
-        let paramIndex = 1;
+        let i = 1;
 
-        // 1. Поиск по тексту (если написали "cola")
         if (q && q.trim() !== '') {
-            query += ` AND (p.name_uz ILIKE $${paramIndex})`;
+            query += ` AND (p.name_uz ILIKE $${i})`;
             params.push(`%${q}%`);
-            paramIndex++;
+            i++;
         }
-
-        // 2. Фильтр по категории (СТРОГОЕ СОВПАДЕНИЕ)
         if (category && category !== 'Barchasi') {
-            query += ` AND p.category = $${paramIndex}`;
+            query += ` AND p.category = $${i}`;
             params.push(category);
-            paramIndex++;
+            i++;
         }
-
         query += ' ORDER BY p.id DESC';
-
         const { rows } = await db.query(query, params);
         res.json(rows);
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ error: "Xatolik" });
-    }
+    } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// Список магазинов
-app.get('/stores', async (req, res) => {
+// --- 2. КЛИЕНТ: Создание заказа ---
+app.post('/orders', async (req, res) => {
+    const client = await db.connect();
     try {
-        const { rows } = await db.query('SELECT * FROM stores');
-        res.json(rows);
-    } catch (error) {
-        res.status(500).json({ error: "Xatolik" });
-    }
+        const { user_name, user_phone, user_address, total_price, delivery_price, items } = req.body;
+        await client.query('BEGIN');
+
+        const orderRes = await client.query(
+            `INSERT INTO orders (user_name, user_phone, user_address, total_price, delivery_price) 
+             VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+            [user_name, user_phone, user_address, total_price, delivery_price]
+        );
+        const orderId = orderRes.rows[0].id;
+
+        for (let item of items) {
+            await client.query(
+                `INSERT INTO order_items (order_id, product_id, product_name, quantity, price) 
+                 VALUES ($1, $2, $3, $4, $5)`,
+                [orderId, item.id, item.name, item.quantity, item.price]
+            );
+        }
+
+        await client.query('COMMIT');
+        res.json({ success: true, orderId });
+    } catch (e) {
+        await client.query('ROLLBACK');
+        res.status(500).json({ error: e.message });
+    } finally { client.release(); }
+});
+
+// --- 3. ПРОДАВЕЦ: Получить список заказов ---
+app.get('/admin/orders', async (req, res) => {
+    try {
+        // Получаем заказы и сортируем: сначала новые
+        const ordersRes = await db.query(`
+            SELECT * FROM orders ORDER BY id DESC LIMIT 50
+        `);
+        const orders = ordersRes.rows;
+
+        // Для каждого заказа подгружаем список товаров
+        for (let order of orders) {
+            const itemsRes = await db.query(`SELECT * FROM order_items WHERE order_id = $1`, [order.id]);
+            order.items = itemsRes.rows;
+        }
+
+        res.json(orders);
+    } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// --- 4. ПРОДАВЕЦ: Изменить статус заказа (Принять/Завершить) ---
+app.patch('/admin/orders/:id', async (req, res) => {
+    const { id } = req.params;
+    const { status } = req.body; // 'accepted', 'done', 'canceled'
+
+    try {
+        await db.query('UPDATE orders SET status = $1 WHERE id = $2', [status, id]);
+        res.json({ success: true });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/stores', async (req, res) => {
+    const { rows } = await db.query('SELECT * FROM stores');
+    res.json(rows);
 });
 
 app.listen(PORT, () => {
-    console.log(`✅ Server is running on port ${PORT}`);
+    console.log(`✅ Server running on ${PORT}`);
 });

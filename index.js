@@ -111,3 +111,28 @@ app.get('/stores', async (req, res) => {
 app.listen(PORT, () => {
     console.log(`✅ Server running on ${PORT}`);
 });
+// --- 5. КЛИЕНТ: История заказов пользователя ---
+app.get('/orders/user/:phone', async (req, res) => {
+    const { phone } = req.params;
+    try {
+        // Ищем заказы по номеру телефона (сначала свежие)
+        const ordersRes = await db.query(`
+            SELECT * FROM orders 
+            WHERE user_phone = $1 
+            ORDER BY id DESC
+        `, [phone]);
+        
+        const orders = ordersRes.rows;
+
+        // Подгружаем товары для каждого заказа
+        for (let order of orders) {
+            const itemsRes = await db.query(`SELECT * FROM order_items WHERE order_id = $1`, [order.id]);
+            order.items = itemsRes.rows;
+        }
+
+        res.json(orders);
+    } catch (e) {
+        console.error(e);
+        res.status(500).json({ error: "Xatolik" });
+    }
+});
